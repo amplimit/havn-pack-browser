@@ -86,14 +86,19 @@ path = "/dev/shm"
 size_mb = 1024
 
 # Chromium's user-namespace sandbox needs `pivot_root` and
-# `userfaultfd`, both of which are in havn's default seccomp blocklist.
-# Without these two relaxations Chromium falls back to --no-sandbox,
-# which would void havn's per-agent isolation guarantee. havn refuses
-# to relax other names from the blocklist (mount, ptrace, bpf, etc.),
-# so this list is bounded.
+# `userfaultfd`, both of which are in havn's default seccomp blocklist,
+# and, from havn 0.1.7, `user_namespaces`, which lets agents create user
+# namespaces at all. Without them Chromium cannot start its sandbox, and
+# running it with --no-sandbox would void havn's per-agent isolation
+# guarantee. havn refuses to relax other names from the blocklist
+# (mount, ptrace, bpf, etc.), so this list is bounded.
 [seccomp]
-allow_extra = ["pivot_root", "userfaultfd"]
+allow_extra = ["pivot_root", "userfaultfd", "user_namespaces"]
 ```
+
+On havn 0.1.6 and earlier leave out `user_namespaces`: those versions do
+not know the name, and an agent whose list has a name its runtime does not
+know gets the full blocklist, so the browser would not start.
 
 Optionally override the agent DNS servers — defaults to public
 resolvers; override for internal DNS / Pi-hole / DoH:
@@ -200,7 +205,7 @@ runtime apply them mechanically without knowing they're for a browser.
 |----------------|----------------------------|
 | `[[extra_mounts]]` (havn spec §4.1) | Bind-mounts `/opt/havn/{chromium,node,playwright-cli}` into the agent namespace so the LLM's `shell` calls find the binaries. |
 | `[[tmpfs_mounts]]` (havn spec §16.2) | Mounts a 1 GiB tmpfs at `/dev/shm` so Chromium's renderer-process IPC works on non-trivial pages. |
-| `[seccomp.allow_extra]` (havn spec §16.2) | Relaxes the runtime's syscall blocklist for `pivot_root` + `userfaultfd` — the two syscalls Chromium's user-namespace sandbox needs. havn restricts the operator's relaxation menu to a curated list (`OPERATOR_RELAXABLE_SYSCALLS` in `havn-runtime/src/seccomp.rs`); even a hostile pack documentation cannot get an operator to relax `mount` / `ptrace` / `bpf`. |
+| `[seccomp.allow_extra]` (havn spec §16.2) | Relaxes the runtime's syscall blocklist for `pivot_root` + `userfaultfd` — the two syscalls Chromium's user-namespace sandbox needs — and, from havn 0.1.7, `user_namespaces`, which lets the agent create the user namespace itself. havn restricts the operator's relaxation menu to a curated list (`OPERATOR_RELAXABLE_SYSCALLS` in `havn-runtime/src/seccomp.rs`); even a hostile pack documentation cannot get an operator to relax `mount` / `ptrace` / `bpf`. |
 
 There is no `can_run_browser` policy bit. There is no per-pack code in
 havn-core. Add a different pack later — same mechanism, no havn change.
