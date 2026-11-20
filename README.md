@@ -54,8 +54,9 @@ sudo ./setup.sh                    # installs to /opt/havn/, idempotent
 
 `setup.sh` only places binaries on the host. To make Chromium actually
 work *inside* an agent's namespace you need to declare three things in
-your havn gateway config (`~/.config/havn/config.toml` for single-user
-installs; `/etc/havn/config.toml` for multi-user). havn provides each
+your havn gateway config (`$HAVN_CONFIG`, else `~/.config/havn/config.toml`
+of the user the gateway runs as: `/root/.config/havn/config.toml` under
+havn's systemd unit). havn provides each
 of these as a generic primitive — the gateway never knows it's the
 browser pack that needs them.
 
@@ -109,28 +110,61 @@ agent_dns = ["9.9.9.9", "149.112.112.112"]   # Quad9, for example
 # agent_pool_cidr = "10.42.0.0/16"           # only override on CIDR conflicts (VPN / Docker / k8s)
 ```
 
-Then **enable outbound network on the role(s) that should run the
-browser**, and raise the per-agent memory ceiling. The browser pack
-needs egress to actually reach the internet — havn defaults to no
-outbound (spec §6.3 / §1.5 security narrative). Chromium with one tab
-sits at ~250 MiB idle and 700–900 MiB on a JS-heavy SPA.
+Then check the agent's **network access** and raise its **memory
+limit**. Chromium with one tab sits at ~250 MiB idle and 700–900 MiB on
+a JS-heavy SPA.
 
-```bash
-# Required: open the netns. Without this the agent has only `lo` DOWN
-# and Chromium gets `ERR_INTERNET_DISCONNECTED` on every navigate.
-havn role set-policy <role-name> network_policy.egress_allowed true
+Network access is one of three settings, on the agent's settings page
+(or `PATCH /agents/{id}/web` with `egress_allowed` and `egress_proxy`):
+off; allowed domains, through the gateway's egress proxy; or every
+public address. Agents get `[network] default_egress` when they are
+created, which is `allowlist` (allowed domains, through the proxy)
+unless the operator sets `off` or `all`. Through the proxy, a domain on
+neither list waits for the owner's answer in the dashboard chat, and
+tools reach the proxy through `HTTP_PROXY`/`HTTPS_PROXY`; a tool that
+does not use those variables has no network there (see the havn
+README's Security Model). In multi-user mode the owner's role must
+allow egress (`permissions.can_access_network` and
+`network_policy.egress_allowed`). A change applies on the agent's next
+start.
 
-# Required: 1024 minimum; 1536–2048 is comfortable. Below ~1024 will
-# OOM-kill the agent on the first big page load.
-havn role set-policy <role-name> resource_limits.memory_mb 1536
-```
+The memory limit is `resource_limits.memory_mb` in the agent's policy
+(512 by default). 1024 is the minimum; 1536–2048 is comfortable. Below
+~1024 the agent is OOM-killed on the first big page load.
+
+- **Team roles** (multi-user): `havn role set-policy <role-id>
+  <policy-file>` replaces a team role's whole policy with a JSON file,
+  and keys the file leaves out take their defaults. Start from the
+  current one, which `havn role show <role-id>` prints after
+  `policy:`, save it to a file, set `"memory_mb": 1536` under
+  `resource_limits`, then:
+
+  ```bash
+  havn role set-policy <role-id> ./role.json
+  ```
+
+  Team admins can make the same edit on the dashboard's team roles page.
+  In multi-user mode an agent's own override cannot go above its role.
+- **An agent's own override** (`config.policy`), on a single-user
+  gateway, whose users hold no team role (they get the defaults):
+  `PATCH /agents/{id}` with `config.policy` replaces the stored override
+  as a whole, so send the agent's current `config.policy` (from
+  `GET /agents/{id}`) with `resource_limits.memory_mb` added.
 
 ### 3. Drop the skill into agents that should use the browser
 
+Agent workspaces are under the gateway's `workspace_root`, by default
+`~/.local/share/havn/agents` of the user the gateway runs as
+(`/root/.local/share/havn/agents` under havn's systemd unit). Only root
+can enter an agent's directory, and the workspace belongs to the
+agent's own uid, so copy as root and hand the skill to that owner:
+
 ```bash
 # replace <agent-id> with the UUID of the agent you want to enable browser for
-mkdir -p /var/lib/havn/agents/<agent-id>/workspace/skills/browser
-cp SKILL.md /var/lib/havn/agents/<agent-id>/workspace/skills/browser/SKILL.md
+WS=/root/.local/share/havn/agents/<agent-id>/workspace
+mkdir -p "$WS/skills/browser"
+cp SKILL.md "$WS/skills/browser/SKILL.md"
+chown -R --reference="$WS" "$WS/skills/browser"
 ```
 
 Restart the agent so the runtime indexes the new skill:
